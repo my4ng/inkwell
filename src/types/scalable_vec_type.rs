@@ -21,6 +21,7 @@ impl<'ctx> ScalableVectorType<'ctx> {
     ///
     /// # Safety
     /// Undefined behavior, if referenced type isn't scalable vector type
+    #[llvm_versions(12..)]
     pub unsafe fn new(scalable_vector_type: LLVMTypeRef) -> Self {
         assert!(!scalable_vector_type.is_null());
 
@@ -36,7 +37,7 @@ impl<'ctx> ScalableVectorType<'ctx> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use inkwell::context::Context;
     ///
     /// let context = Context::create();
@@ -44,6 +45,7 @@ impl<'ctx> ScalableVectorType<'ctx> {
     /// let f32_scalable_vec_type = f32_type.scalable_vec_type(3);
     /// let f32_scalable_vec_type_size = f32_scalable_vec_type.size_of();
     /// ```
+    #[llvm_versions(12..)]
     pub fn size_of(self) -> Option<IntValue<'ctx>> {
         self.scalable_vec_type.size_of()
     }
