@@ -15,8 +15,9 @@ use crate::values::{AnyValue, AsValueRef, FunctionValue, GenericValue};
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::marker::PhantomData;
-use std::mem::{forget, size_of, transmute_copy, MaybeUninit};
+use std::mem::{forget, size_of, transmute_copy};
 use std::ops::Deref;
+use std::ptr;
 use std::rc::Rc;
 
 static EE_INNER_PANIC: &str = "ExecutionEngineInner should exist until Drop";
@@ -219,25 +220,23 @@ impl<'ctx> ExecutionEngine<'ctx> {
             _ => (),
         }
 
-        let mut new_module = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut new_module = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
 
         let code = unsafe {
             LLVMRemoveModule(
                 self.execution_engine_inner(),
                 module.module.get(),
-                new_module.as_mut_ptr(),
-                err_string.as_mut_ptr(),
+                &mut new_module,
+                &mut err_string,
             )
         };
 
         if code == 1 {
             unsafe {
-                return Err(RemoveModuleError::LLVMError(LLVMString::new(err_string.assume_init())));
+                return Err(RemoveModuleError::LLVMError(LLVMString::new(err_string)));
             }
         }
-
-        let new_module = unsafe { new_module.assume_init() };
 
         module.module.set(new_module);
         *module.owned_by_ee.borrow_mut() = None;
@@ -364,12 +363,12 @@ impl<'ctx> ExecutionEngine<'ctx> {
         }
 
         let c_string = to_c_str(fn_name);
-        let mut function = MaybeUninit::uninit();
+        let mut function = ptr::null_mut();
 
-        let code = unsafe { LLVMFindFunction(self.execution_engine_inner(), c_string.as_ptr(), function.as_mut_ptr()) };
+        let code = unsafe { LLVMFindFunction(self.execution_engine_inner(), c_string.as_ptr(), &mut function) };
 
         if code == 0 {
-            return unsafe { FunctionValue::new(function.assume_init()).ok_or(FunctionLookupError::FunctionNotFound) };
+            return unsafe { FunctionValue::new(function).ok_or(FunctionLookupError::FunctionNotFound) };
         };
 
         Err(FunctionLookupError::FunctionNotFound)

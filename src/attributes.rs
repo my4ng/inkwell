@@ -18,6 +18,7 @@ use crate::types::AnyTypeEnum;
 /// Functions, function parameters, and return types can have `Attribute`s to indicate
 /// how they should be treated by optimizations and code generation.
 #[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct Attribute {
     pub(crate) attribute: LLVMAttributeRef,
 }

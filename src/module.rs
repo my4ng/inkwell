@@ -8,11 +8,10 @@ use llvm_sys::bit_writer::{LLVMWriteBitcodeToFile, LLVMWriteBitcodeToMemoryBuffe
 use llvm_sys::core::LLVMGetTypeByName;
 use llvm_sys::core::{
     LLVMAddFunction, LLVMAddGlobal, LLVMAddGlobalInAddressSpace, LLVMAddNamedMetadataOperand, LLVMCloneModule,
-    LLVMDisposeMessage, LLVMDisposeModule, LLVMDumpModule, LLVMGetFirstFunction, LLVMGetFirstGlobal,
-    LLVMGetLastFunction, LLVMGetLastGlobal, LLVMGetModuleContext, LLVMGetModuleIdentifier, LLVMGetNamedFunction,
-    LLVMGetNamedGlobal, LLVMGetNamedMetadataNumOperands, LLVMGetNamedMetadataOperands, LLVMGetTarget,
-    LLVMPrintModuleToFile, LLVMPrintModuleToString, LLVMSetDataLayout, LLVMSetModuleIdentifier,
-    LLVMSetModuleInlineAsm2, LLVMSetTarget,
+    LLVMDisposeModule, LLVMDumpModule, LLVMGetFirstFunction, LLVMGetFirstGlobal, LLVMGetLastFunction,
+    LLVMGetLastGlobal, LLVMGetModuleContext, LLVMGetModuleIdentifier, LLVMGetNamedFunction, LLVMGetNamedGlobal,
+    LLVMGetNamedMetadataNumOperands, LLVMGetNamedMetadataOperands, LLVMGetTarget, LLVMPrintModuleToFile,
+    LLVMPrintModuleToString, LLVMSetDataLayout, LLVMSetModuleIdentifier, LLVMSetModuleInlineAsm2, LLVMSetTarget,
 };
 use llvm_sys::core::{LLVMAddModuleFlag, LLVMGetModuleFlag};
 use llvm_sys::debuginfo::{LLVMGetModuleDebugMetadataVersion, LLVMStripModuleDebugInfo};
@@ -33,7 +32,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::ffi::{c_void, CStr};
 use std::fs::File;
 use std::marker::PhantomData;
-use std::mem::{forget, MaybeUninit};
+use std::mem::forget;
 use std::path::Path;
 use std::ptr;
 use std::rc::Rc;
@@ -473,24 +472,19 @@ impl<'ctx> Module<'ctx> {
             return Err(LLVMString::create_from_str(string));
         }
 
-        let mut execution_engine = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut execution_engine = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
         let code = unsafe {
             // Takes ownership of module
-            LLVMCreateExecutionEngineForModule(
-                execution_engine.as_mut_ptr(),
-                self.module.get(),
-                err_string.as_mut_ptr(),
-            )
+            LLVMCreateExecutionEngineForModule(&mut execution_engine, self.module.get(), &mut err_string)
         };
 
         if code == 1 {
             unsafe {
-                return Err(LLVMString::new(err_string.assume_init()));
+                return Err(LLVMString::new(err_string));
             }
         }
 
-        let execution_engine = unsafe { execution_engine.assume_init() };
         let execution_engine = unsafe { ExecutionEngine::new(Rc::new(execution_engine), false) };
 
         *self.owned_by_ee.borrow_mut() = Some(execution_engine.clone());
@@ -527,25 +521,20 @@ impl<'ctx> Module<'ctx> {
             return Err(LLVMString::create_from_str(string));
         }
 
-        let mut execution_engine = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut execution_engine = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
 
         let code = unsafe {
             // Takes ownership of module
-            LLVMCreateInterpreterForModule(
-                execution_engine.as_mut_ptr(),
-                self.module.get(),
-                err_string.as_mut_ptr(),
-            )
+            LLVMCreateInterpreterForModule(&mut execution_engine, self.module.get(), &mut err_string)
         };
 
         if code == 1 {
             unsafe {
-                return Err(LLVMString::new(err_string.assume_init()));
+                return Err(LLVMString::new(err_string));
             }
         }
 
-        let execution_engine = unsafe { execution_engine.assume_init() };
         let execution_engine = unsafe { ExecutionEngine::new(Rc::new(execution_engine), false) };
 
         *self.owned_by_ee.borrow_mut() = Some(execution_engine.clone());
@@ -586,26 +575,25 @@ impl<'ctx> Module<'ctx> {
             return Err(LLVMString::create_from_str(string));
         }
 
-        let mut execution_engine = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut execution_engine = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
 
         let code = unsafe {
             // Takes ownership of module
             LLVMCreateJITCompilerForModule(
-                execution_engine.as_mut_ptr(),
+                &mut execution_engine,
                 self.module.get(),
                 opt_level as u32,
-                err_string.as_mut_ptr(),
+                &mut err_string,
             )
         };
 
         if code == 1 {
             unsafe {
-                return Err(LLVMString::new(err_string.assume_init()));
+                return Err(LLVMString::new(err_string));
             }
         }
 
-        let execution_engine = unsafe { execution_engine.assume_init() };
         let execution_engine = unsafe { ExecutionEngine::new(Rc::new(execution_engine), true) };
 
         *self.owned_by_ee.borrow_mut() = Some(execution_engine.clone());
@@ -655,9 +643,6 @@ impl<'ctx> Module<'ctx> {
         no_frame_pointer_elim: bool,
         enable_fast_isel: bool,
     ) -> Result<ExecutionEngine<'ctx>, LLVMString> {
-        use std::mem::MaybeUninit;
-        // ...
-
         // 1) Initialize the native target
         Target::initialize_native(&InitializationConfig::default()).map_err(|mut err_string| {
             err_string.push('\0');
@@ -695,7 +680,8 @@ impl<'ctx> Module<'ctx> {
         }
 
         // 4) Build LLVMMCJITCompilerOptions
-        let mut options_uninit = MaybeUninit::<llvm_sys::execution_engine::LLVMMCJITCompilerOptions>::zeroed();
+        let mut options_uninit =
+            core::mem::MaybeUninit::<llvm_sys::execution_engine::LLVMMCJITCompilerOptions>::uninit();
         unsafe {
             // Ensure defaults are initialized
             llvm_sys::execution_engine::LLVMInitializeMCJITCompilerOptions(
@@ -713,27 +699,26 @@ impl<'ctx> Module<'ctx> {
         options.MCJMM = mmgr;
 
         // 5) Create MCJIT
-        let mut execution_engine = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut execution_engine = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
         let code = unsafe {
             llvm_sys::execution_engine::LLVMCreateMCJITCompilerForModule(
-                execution_engine.as_mut_ptr(),
+                &mut execution_engine,
                 self.module.get(),
                 &mut options,
                 std::mem::size_of::<llvm_sys::execution_engine::LLVMMCJITCompilerOptions>(),
-                err_string.as_mut_ptr(),
+                &mut err_string,
             )
         };
 
         // If creation fails, extract the error string
         if code == 1 {
             unsafe {
-                return Err(LLVMString::new(err_string.assume_init()));
+                return Err(LLVMString::new(err_string));
             }
         }
 
         // Otherwise, it succeeded, so wrap the raw pointer
-        let execution_engine = unsafe { execution_engine.assume_init() };
         let execution_engine = unsafe { ExecutionEngine::new(Rc::new(execution_engine), true) };
 
         *self.owned_by_ee.borrow_mut() = Some(execution_engine.clone());
@@ -865,16 +850,14 @@ impl<'ctx> Module<'ctx> {
     /// # Remarks
     /// See also: [`LLVMVerifyModule`](https://llvm.org/doxygen/group__LLVMCAnalysis.html#ga5645aec2d95116c0432a676db77b2cb0).
     pub fn verify(&self) -> Result<(), LLVMString> {
-        let mut err_str: *mut ::libc::c_char = ::core::ptr::null_mut();
+        let mut err_str = ptr::null_mut();
 
         let action = LLVMVerifierFailureAction::LLVMReturnStatusAction;
 
         let code = unsafe { LLVMVerifyModule(self.module.get(), action, &mut err_str) };
 
-        if code == 1 && !err_str.is_null() {
+        if code == 1 {
             return unsafe { Err(LLVMString::new(err_str)) };
-        } else if !err_str.is_null() {
-            unsafe { LLVMDisposeMessage(err_str) };
         }
 
         Ok(())
@@ -967,7 +950,7 @@ impl<'ctx> Module<'ctx> {
             .to_str()
             .expect("Did not find a valid Unicode path string");
         let path = to_c_str(path_str);
-        let mut err_string: *mut libc::c_char = ::core::ptr::null_mut();
+        let mut err_string = ptr::null_mut();
         let return_code = unsafe {
             LLVMPrintModuleToFile(
                 self.module.get(),
@@ -977,12 +960,8 @@ impl<'ctx> Module<'ctx> {
         };
 
         if return_code == 1 {
-            if !err_string.is_null() {
-                unsafe {
-                    return Err(LLVMString::new(err_string));
-                }
-            } else {
-                unsafe { return Err(LLVMString::new(c"Error string was uninitialized.".as_ptr().cast())) }
+            unsafe {
+                return Err(LLVMString::new(err_string));
             }
         }
 
@@ -1261,29 +1240,24 @@ impl<'ctx> Module<'ctx> {
         buffer: &MemoryBuffer,
         context: impl AsContextRef<'ctx>,
     ) -> Result<Self, LLVMString> {
-        let mut module = MaybeUninit::uninit();
-        let mut err_string = MaybeUninit::uninit();
+        let mut module = ptr::null_mut();
+        let mut err_string = ptr::null_mut();
 
         // LLVM has a newer version of this function w/o the error result since 3.8 but this deprecated function
         // hasen't yet been removed even in LLVM 8. Seems fine to use instead of switching to their
         // error diagnostics handler for now.
         #[allow(deprecated)]
         let success = unsafe {
-            LLVMParseBitcodeInContext(
-                context.as_ctx_ref(),
-                buffer.memory_buffer,
-                module.as_mut_ptr(),
-                err_string.as_mut_ptr(),
-            )
+            LLVMParseBitcodeInContext(context.as_ctx_ref(), buffer.memory_buffer, &mut module, &mut err_string)
         };
 
         if success != 0 {
             unsafe {
-                return Err(LLVMString::new(err_string.assume_init()));
+                return Err(LLVMString::new(err_string));
             }
         }
 
-        unsafe { Ok(Module::new(module.assume_init())) }
+        unsafe { Ok(Module::new(module)) }
     }
 
     /// A convenience function for creating a `Module` from a bitcode file for a given context.
